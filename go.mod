@@ -1,4 +1,4 @@
-module github.com/medunes/go-kata
+module github.com/fithanso/go-kata
 
 go 1.25.5
 

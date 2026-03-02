@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/medunes/go-kata/01-context-cancellation-concurrency/01-concurrent-aggregator/order"
-	"github.com/medunes/go-kata/01-context-cancellation-concurrency/01-concurrent-aggregator/profile"
+	"github.com/fithanso/go-kata/01-context-cancellation-concurrency/01-concurrent-aggregator/order"
+	"github.com/fithanso/go-kata/01-context-cancellation-concurrency/01-concurrent-aggregator/profile"
 
 	"golang.org/x/sync/errgroup"
 )
