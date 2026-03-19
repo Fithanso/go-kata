@@ -9,8 +9,10 @@ import (
 )
 
 func huyachim(ctx context.Context) error {
+	expired := time.After(1 * time.Second)
+	
 	select {
-	case <-time.After(1 * time.Second):
+	case <- expired:
 		return fmt.Errorf("gavno error!!!")
 	case <-ctx.Done():
 		return ctx.Err()
@@ -137,7 +139,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	
-	pool := NewPool(3, true)
+	pool := NewPool(3, false)
 	
 	wg.Add(1)
 	go func() {
