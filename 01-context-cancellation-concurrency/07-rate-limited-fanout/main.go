@@ -3,13 +3,22 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
-	// "http"
+
 	"sync"
 
-	"golang.org/x/time/rate"
 	"golang.org/x/sync/semaphore"
+	"golang.org/x/time/rate"
 )
+
+
+func MockRequest(shouldFail bool) error {
+	if shouldFail {
+		return fmt.Errorf("example error")
+	}
+	return nil
+}
 
 const (
 	MAXINFLIGHT = 8
@@ -37,32 +46,40 @@ type FetchRes struct {
 
 
 func (foc *FanOutClient) FetchAll(parent context.Context, userIDs []int) (map[int][]byte, error) {
+	// TODO: передавать горутинам каналы и http клиента
 	ctx, cancel := context.WithCancel(parent) 
 	defer cancel()
+	
+	client := http.Client{
+		Transport: http.DefaultTransport,
+		Timeout: 2 * time.Second,
+	}
+		
 	
 	results := make(map[int][]byte)
 	var (
 		wg sync.WaitGroup
 	)
 	
-	resChan := make(chan FetchRes)
-	errChan := make(chan error)
-	doneChan := make(chan error)
+	resChan := make(chan FetchRes) // for worker - aggregator communication. contains result
+	errChan := make(chan error, 1) // for worker - FetchAll communication. contains possible errors
+	doneChan := make(chan error) // for aggregator - FetchAll communication
 	
 	go func() {
-		
+		// results aggregator
 		for {
 			select {
 				case <- ctx.Done():
 				return
 				
-				case res := <- resChan:
+				case res, ok := <- resChan:
+				if !ok {
+					// no more results - wg was awaited and resChan is closed
+					close(doneChan)
+					return
+				}
 				results[res.uid] = res.res
 				
-				case err := <- errChan:
-				// return to the main FetchAll function, pass the error
-				doneChan <- err
-				return
 			}
 		}
 	}()
@@ -75,11 +92,8 @@ func (foc *FanOutClient) FetchAll(parent context.Context, userIDs []int) (map[in
 		// check if context is not closed
 		select {
 			case <- ctx.Done():
+			// exits immediately if any error occurred, because ctx is closed
 			return nil, ctx.Err()
-			
-			case fetchErr := <- doneChan:
-			// exit immediately if any error occurred
-			return nil, fetchErr
 			
 			default:
 		}
@@ -95,7 +109,9 @@ func (foc *FanOutClient) FetchAll(parent context.Context, userIDs []int) (map[in
 		}
 		
 		wg.Add(1)
-		go func() {
+		go func(httpCli http.Client) {
+			
+		_ = httpCli
 		defer foc.sem.Release(1)
 		defer wg.Done()	
 		
@@ -103,21 +119,38 @@ func (foc *FanOutClient) FetchAll(parent context.Context, userIDs []int) (map[in
 			case <- ctx.Done():
 			return
 			
-			case <- doneChan:
-			return
-			
 			default:
 		}
-		//time.Sleep(2 * time.Second)
-		resChan <- FetchRes{uid: uid, res: []byte("success")}
+		time.Sleep(1 * time.Second)
 		
-		}()
+		err := MockRequest(false)
+		
+		if err != nil {
+			errChan <- fmt.Errorf("example error")
+			return
+		}
+		resChan <- FetchRes{uid: uid, res: []byte("success")}
+
+		}(client)
 		
 		
 	}
 	
-	wg.Wait()
-	return results, nil
+	go func() {
+		wg.Wait()
+		close(resChan)
+	}()
+	
+	select {
+		case <- doneChan:
+		return results, nil
+		
+		case err := <- errChan:
+		cancel()
+		return nil, err
+	}
+	
+	
 }
 
 // в метод приходят айдишки. из каждого id мы далем PendingJob. они хранятся в мапе клиента. клиент имеет: мапу с джобами, лимитер, семафор.
@@ -137,7 +170,7 @@ func main() {
 		fres map[int][]byte
 	)
 	
-	uidsLen := 100
+	uidsLen := 20
 	// TODO: при десяти проблем нет. проблемы со 100 и если дропнуть ошибку. мб не возвращается в семафор или лимитер
 	
 	uids := make([]int, uidsLen)
@@ -146,6 +179,7 @@ func main() {
 	}	
 
 	// launch fetcher
+	n1 := time.Now()
 	wg.Go(func() {
 		res, err := foCli.FetchAll(ctx, uids)
 		if err != nil {
@@ -161,5 +195,7 @@ func main() {
 		fmt.Println(uid, string(result))
 	}
 	fmt.Println(len(fres))
+	
+	fmt.Printf("Program took %d secs to run \n", time.Since(n1) / time.Second)
 		
 }
