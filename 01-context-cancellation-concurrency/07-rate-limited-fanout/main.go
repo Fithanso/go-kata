@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"sync"
+	"log/slog"
 
 	"golang.org/x/sync/semaphore"
 	"golang.org/x/time/rate"
@@ -65,7 +66,7 @@ func (foc *FanOutClient) FetchAll(parent context.Context, userIDs []int) (map[in
 	
 	resChan := make(chan FetchRes) // for worker - aggregator communication. contains result
 	errChan := make(chan error, 1) // for worker - FetchAll communication. contains possible errors
-	doneChan := make(chan error) // for aggregator - FetchAll communication
+	doneChan := make(chan struct{}) // for aggregator - FetchAll communication
 	
 	go func() {
 		// results aggregator
@@ -128,13 +129,20 @@ func (foc *FanOutClient) FetchAll(parent context.Context, userIDs []int) (map[in
 		err := MockRequest(false)
 		
 		if err != nil {
-			errChan <- err
-			return
+			cancel()
+			slog.Error(err.Error())
+			select {
+				case errChan <- err:
+				return
+				
+				default:
+				return
+			}	
 		}
+		
 		resChan <- FetchRes{uid: uid, res: []byte("success")}
 
 		}(foc.cli)
-		
 		
 	}
 	
@@ -148,7 +156,6 @@ func (foc *FanOutClient) FetchAll(parent context.Context, userIDs []int) (map[in
 		return results, nil
 		
 		case err := <- errChan:
-		cancel()
 		return nil, err
 	}
 	
@@ -169,7 +176,7 @@ func main() {
 		fres map[int][]byte
 	)
 	
-	uidsLen := 20
+	uidsLen := 100
 	
 	uids := make([]int, uidsLen)
 	for i := 0; i < uidsLen; i++ {
