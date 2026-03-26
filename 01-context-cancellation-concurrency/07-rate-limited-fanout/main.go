@@ -29,13 +29,20 @@ const (
 type FanOutClient struct {
 	limiter     *rate.Limiter
 	sem         *semaphore.Weighted
+	cli         *http.Client
 }
 
 func NewFanOutClient (l *rate.Limiter, s *semaphore.Weighted) *FanOutClient {
 	
+	client := &http.Client{
+		Transport: http.DefaultTransport,
+		Timeout: 2 * time.Second,
+	}
+	
 	return &FanOutClient{
 		limiter:     l,
 		sem:         s,
+		cli:         client,
 	}
 }
 
@@ -50,11 +57,6 @@ func (foc *FanOutClient) FetchAll(parent context.Context, userIDs []int) (map[in
 	ctx, cancel := context.WithCancel(parent) 
 	defer cancel()
 	
-	client := http.Client{
-		Transport: http.DefaultTransport,
-		Timeout: 2 * time.Second,
-	}
-		
 	
 	results := make(map[int][]byte)
 	var (
@@ -109,7 +111,7 @@ func (foc *FanOutClient) FetchAll(parent context.Context, userIDs []int) (map[in
 		}
 		
 		wg.Add(1)
-		go func(httpCli http.Client) {
+		go func(httpCli *http.Client) {
 			
 		_ = httpCli
 		defer foc.sem.Release(1)
@@ -126,12 +128,12 @@ func (foc *FanOutClient) FetchAll(parent context.Context, userIDs []int) (map[in
 		err := MockRequest(false)
 		
 		if err != nil {
-			errChan <- fmt.Errorf("example error")
+			errChan <- err
 			return
 		}
 		resChan <- FetchRes{uid: uid, res: []byte("success")}
 
-		}(client)
+		}(foc.cli)
 		
 		
 	}
@@ -153,15 +155,12 @@ func (foc *FanOutClient) FetchAll(parent context.Context, userIDs []int) (map[in
 	
 }
 
-// в метод приходят айдишки. из каждого id мы далем PendingJob. они хранятся в мапе клиента. клиент имеет: мапу с джобами, лимитер, семафор.
-// метод FetchAll ждет завершения всех горутин либо первой ошибки. в конце очищаем поле с джобами
-// при создании клиента передаем ему лимитер и семафор. проходим по списку id, для каждого id ждем лимитер, далее ждем семафор, 
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	
-	lim := rate.NewLimiter(rate.Every(RPS * time.Second), BURST)
+	lim := rate.NewLimiter(rate.Limit(RPS), BURST)
 	sem := semaphore.NewWeighted(MAXINFLIGHT)
 	foCli := NewFanOutClient(lim, sem)
 	
@@ -171,7 +170,6 @@ func main() {
 	)
 	
 	uidsLen := 20
-	// TODO: при десяти проблем нет. проблемы со 100 и если дропнуть ошибку. мб не возвращается в семафор или лимитер
 	
 	uids := make([]int, uidsLen)
 	for i := 0; i < uidsLen; i++ {
@@ -184,7 +182,6 @@ func main() {
 		res, err := foCli.FetchAll(ctx, uids)
 		if err != nil {
 			fmt.Println(err)
-			wg.Done()
 			return
 		}
 		fres = res
